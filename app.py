@@ -24,14 +24,19 @@ st.markdown("""
     [data-testid="stToolbar"],
     [data-testid="stDecoration"],
     [data-testid="stStatusWidget"],
+    [data-testid="manage-app-button"],
     #MainMenu,
     footer,
     .viewerBadge_container__r5tak,
     .styles_viewerBadge__CvC9N,
     div[class*="viewerBadge"],
-    div[class*="StatusWidget"] {
+    div[class*="StatusWidget"],
+    div[class*="hostBadge"],
+    a[href*="streamlit.io/cloud"] {
         display: none !important;
         visibility: hidden !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
     }
     /* Kopfzeile transparent machen, damit nur noch der >> Pfeil für deinen Admin-Login bleibt */
     header[data-testid="stHeader"] {
