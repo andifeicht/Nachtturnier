@@ -16,7 +16,7 @@ ADMIN_PASSWORT = "admin123"   # Dein Admin-Passwort
 st.markdown("""
 <style>
     .block-container {
-        padding-top: 1.5rem !important;
+        padding-top: 1.2rem !important;
         padding-bottom: 2rem !important;
         max-width: 1100px;
     }
@@ -38,7 +38,6 @@ st.markdown("""
         opacity: 0 !important;
         pointer-events: none !important;
     }
-    /* Kopfzeile transparent machen, damit nur noch der >> Pfeil für deinen Admin-Login bleibt */
     header[data-testid="stHeader"] {
         background: transparent !important;
     }
@@ -140,32 +139,41 @@ st.session_state.timer_end = gespeichert.get("timer_end", None)
 
 if "is_admin" not in st.session_state:
     st.session_state.is_admin = False
+if "show_login" not in st.session_state:
+    st.session_state.show_login = False
 
-# --- SEITENLEISTE: ADMIN-LOGIN ---
-with st.sidebar:
-    st.header("🔐 Turnierleitung")
-    if not st.session_state.is_admin:
-        pw_eingabe = st.text_input("Admin-Passwort", type="password", placeholder="Passwort eingeben...")
-        if st.button("Anmelden", use_container_width=True):
-            if pw_eingabe == ADMIN_PASSWORT:
-                st.session_state.is_admin = True
-                st.rerun()
-            else:
-                st.error("Falsches Passwort")
-        st.caption("Teilnehmer benötigen kein Passwort.")
-    else:
-        st.success("✅ Als Admin angemeldet")
-        if st.button("Abmelden (Teilnehmer-Ansicht)", use_container_width=True):
-            st.session_state.is_admin = False
-            st.rerun()
-
-# --- KOPFZEILE ---
-head_col1, head_col2 = st.columns([3.5, 1.2])
+# --- KOPFZEILE MIT DIREKTEM ADMIN-BUTTON ---
+head_col1, head_col2, head_col3 = st.columns([3.0, 1.3, 1.1])
 with head_col1:
     st.markdown("## 🎾 Gaudi-Nachtturnier")
 with head_col2:
     if st.button("🔄 Aktualisieren", use_container_width=True, help="Lädt die neuesten Paarungen & Ergebnisse"):
         st.rerun()
+with head_col3:
+    if not st.session_state.is_admin:
+        if st.button("🔐 Admin", use_container_width=True, help="Login für Turnierleitung"):
+            st.session_state.show_login = not st.session_state.show_login
+            st.rerun()
+    else:
+        if st.button("🚪 Logout", use_container_width=True, help="Zurück zur Teilnehmer-Ansicht"):
+            st.session_state.is_admin = False
+            st.session_state.show_login = False
+            st.rerun()
+
+# Direktes Login-Feld oben (funktioniert auf jedem Smartphone ohne Seitenleiste)
+if st.session_state.show_login and not st.session_state.is_admin:
+    with st.container(border=True):
+        lc1, lc2 = st.columns([3, 1])
+        with lc1:
+            pw_eingabe = st.text_input("Admin-Passwort", type="password", placeholder="Passwort eingeben...", label_visibility="collapsed")
+        with lc2:
+            if st.button("Anmelden", type="primary", use_container_width=True):
+                if pw_eingabe == ADMIN_PASSWORT:
+                    st.session_state.is_admin = True
+                    st.session_state.show_login = False
+                    st.rerun()
+                else:
+                    st.error("Falsches Passwort")
 
 # --- GROSSER LIVE-SEKUNDEN-TIMER (20 MINUTEN) ---
 timer_aktiv = st.session_state.timer_end is not None
@@ -275,17 +283,13 @@ def get_power_rating(spieler):
 
 def bewerte_team_kombi(p1, p2):
     strafe = 0
-    # 1. Keine zwei Einsteiger (Stärke 4) zusammen
     if p1["Stärke"] == 4 and p2["Stärke"] == 4:
         strafe += 4000
-    # 2. Top-Spieler (Stärke 0) nicht mit Einsteiger (Stärke 4) zusammen
     if {p1["Stärke"], p2["Stärke"]} == {0, 4}:
         strafe += 3000
-    # 3. Zu großes Leistungsgefälle innerhalb eines Teams abbremsen
     partner_diff = abs(get_power_rating(p1) - get_power_rating(p2))
     if partner_diff > 6.5:
         strafe += (partner_diff - 6.5) * 350
-    # 4. Partner-Wiederholung vermeiden
     strafe += p1["Partner"].count(p2["Name"]) * 3000
     return strafe
 
@@ -300,12 +304,10 @@ def bewerte_platz(team1, team2):
     strafe += bewerte_team_kombi(team1[0], team1[1])
     strafe += bewerte_team_kombi(team2[0], team2[1])
     
-    # Team-Ausgeglichenheit hat Vorrang vor einer 2. Begegnung
     rating_t1 = get_power_rating(team1[0]) + get_power_rating(team1[1])
     rating_t2 = get_power_rating(team2[0]) + get_power_rating(team2[1])
     diff_rating = abs(rating_t1 - rating_t2)
     strafe += (diff_rating ** 2) * 180
-    # Harte Obergrenze ab 1.8 Punkten Unterschied
     if diff_rating > 1.8:
         strafe += 2500 + ((diff_rating - 1.8) * 1500)
         
@@ -313,7 +315,7 @@ def bewerte_platz(team1, team2):
         for p2 in team2:
             anz_gegner = p1["Gegner"].count(p2["Name"])
             if anz_gegner >= 2:
-                strafe += 12000  # Niemals 3x gegen denselben Gegner!
+                strafe += 12000
             else:
                 strafe += anz_gegner * 850
             if p2["Name"] in p1["Partner"]:
