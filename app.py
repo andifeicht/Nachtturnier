@@ -12,13 +12,30 @@ st.set_page_config(page_title="Gaudi-Nachtturnier", page_icon="🎾", layout="wi
 DATEI_SPEICHER = "turnier_daten.json"
 ADMIN_PASSWORT = "admin123"   # Dein Admin-Passwort
 
-# --- CUSTOM CSS FÜR MODERNE OPTIK & MOBILE LESBARKEIT ---
+# --- CUSTOM CSS FÜR MODERNE OPTIK, MOBILE LESBARKEIT & SAUBERE OBERFLÄCHE ---
 st.markdown("""
 <style>
     .block-container {
         padding-top: 1.5rem !important;
         padding-bottom: 2rem !important;
         max-width: 1100px;
+    }
+    /* Störende Streamlit- & GitHub-Buttons oben rechts und unten rechts ausblenden */
+    [data-testid="stToolbar"],
+    [data-testid="stDecoration"],
+    [data-testid="stStatusWidget"],
+    #MainMenu,
+    footer,
+    .viewerBadge_container__r5tak,
+    .styles_viewerBadge__CvC9N,
+    div[class*="viewerBadge"],
+    div[class*="StatusWidget"] {
+        display: none !important;
+        visibility: hidden !important;
+    }
+    /* Kopfzeile transparent machen, damit nur noch der >> Pfeil für deinen Admin-Login bleibt */
+    header[data-testid="stHeader"] {
+        background: transparent !important;
     }
     .court-card {
         background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
