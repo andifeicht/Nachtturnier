@@ -688,10 +688,24 @@ else:
                 ist_mein_spiel = mein_name in alle_im_match
                 card_class = "court-card-highlight" if ist_mein_spiel else "court-card"
                 
+                gemeldet_um = m.get("Gemeldet_um", None)
+                rest_korrektur_sek = int(300 - (jetzt - gemeldet_um)) if (m.get("Gemeldet", False) and gemeldet_um) else 0
+                darf_korrigieren = (not m["Erfasst"]) and m.get("Gemeldet", False) and (rest_korrektur_sek > 0)
+                
                 if m["Erfasst"]:
                     status_html = f'<span style="color:#4ade80; font-weight:700;">✅ {m["Punkte1"]} : {m["Punkte2"]}</span>'
                 elif m.get("Gemeldet", False):
-                    status_html = f'<span style="color:#38bdf8; font-weight:700;">📲 {m["Punkte1"]} : {m["Punkte2"]}</span>'
+                    if darf_korrigieren:
+                        korr_end_ms = int((gemeldet_um + 300) * 1000)
+                        timer_span_id = f"korr_timer_{r_idx}_{m_idx}"
+                        status_html = (
+                            f'<span style="color:#38bdf8; font-weight:700;">'
+                            f'📲 {m["Punkte1"]} : {m["Punkte2"]} · '
+                            f'<span id="{timer_span_id}" style="color:#fbbf24; font-variant-numeric: tabular-nums;"></span>'
+                            f'</span>'
+                        )
+                    else:
+                        status_html = f'<span style="color:#4ade80; font-weight:700;">🔒 {m["Punkte1"]} : {m["Punkte2"]}</span>'
                 else:
                     status_html = '<span style="color:#94a3b8;">Läuft</span>'
                     
@@ -714,18 +728,35 @@ else:
                 """
                 st.markdown(card_html, unsafe_allow_html=True)
                 
-                # Prüfen, ob noch nie gemeldet ODER innerhalb des 5-Minuten-Korrekturfensters
-                gemeldet_um = m.get("Gemeldet_um", None)
-                rest_korrektur_sek = int(300 - (jetzt - gemeldet_um)) if (m.get("Gemeldet", False) and gemeldet_um) else 0
-                darf_korrigieren = (not m["Erfasst"]) and m.get("Gemeldet", False) and (rest_korrektur_sek > 0)
+                # Live-JavaScript-Countdown für das 5-Minuten-Korrekturfenster
+                if darf_korrigieren:
+                    korr_end_ms = int((gemeldet_um + 300) * 1000)
+                    timer_span_id = f"korr_timer_{r_idx}_{m_idx}"
+                    components.html(f"""
+                    <script>
+                        (function() {{
+                            var endT = {korr_end_ms};
+                            function tick() {{
+                                var el = window.parent.document.getElementById("{timer_span_id}");
+                                if (!el) return;
+                                var diff = endT - Date.now();
+                                if (diff <= 0) {{
+                                    el.innerHTML = "gesperrt";
+                                    el.style.color = "#94a3b8";
+                                    return;
+                                }}
+                                var m = Math.floor(diff / 60000);
+                                var s = Math.floor((diff % 60000) / 1000);
+                                el.innerHTML = "✏️ " + (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s;
+                                setTimeout(tick, 250);
+                            }}
+                            tick();
+                        }})();
+                    </script>
+                    """, height=0)
                 
                 if (not m["Erfasst"] and not m.get("Gemeldet", False)) or darf_korrigieren:
-                    if darf_korrektur := darf_korrigieren:
-                        min_rest = rest_korrektur_sek // 60
-                        sek_rest = rest_korrektur_sek % 60
-                        expander_titel = f"✏️ Ergebnis Platz {m['Platz']} korrigieren (noch {min_rest}:{sek_rest:02d} Min.)"
-                    else:
-                        expander_titel = f"📝 Ergebnis Platz {m['Platz']} melden"
+                    expander_titel = f"✏️ Ergebnis Platz {m['Platz']} korrigieren" if darf_korrigieren else f"📝 Ergebnis Platz {m['Platz']} melden"
                         
                     with st.expander(expander_titel):
                         ic1, ic2 = st.columns(2)
@@ -746,17 +777,20 @@ else:
                             if mp1 == 0 and mp2 == 0:
                                 st.warning("Bitte Punkte eingeben.")
                             else:
-                                # Aktuellen Stand frisch laden, damit parallele Eingaben anderer Plätze nicht überschrieben werden
                                 frisch = daten_laden()
                                 match_ref = frisch["runden"][r_idx]["Matches"][m_idx]
-                                match_ref["Punkte1"] = int(mp1)
-                                match_ref["Punkte2"] = int(mp2)
-                                match_ref["Gemeldet"] = True
-                                if not match_ref.get("Gemeldet_um"):
-                                    match_ref["Gemeldet_um"] = time.time()
-                                with open(DATEI_SPEICHER, "w", encoding="utf-8") as f:
-                                    json.dump(frisch, f, ensure_ascii=False, indent=2)
-                                st.rerun()
+                                # Sicherheitscheck: nach Ablauf der 5 Minuten keine Speicherung mehr zulassen
+                                if match_ref.get("Gemeldet_um") and (time.time() - match_ref["Gemeldet_um"] > 300):
+                                    st.error("Die 5-Minuten-Korrekturzeit ist abgelaufen – bitte kurz bei der Turnierleitung melden.")
+                                else:
+                                    match_ref["Punkte1"] = int(mp1)
+                                    match_ref["Punkte2"] = int(mp2)
+                                    match_ref["Gemeldet"] = True
+                                    if not match_ref.get("Gemeldet_um"):
+                                        match_ref["Gemeldet_um"] = time.time()
+                                    with open(DATEI_SPEICHER, "w", encoding="utf-8") as f:
+                                        json.dump(frisch, f, ensure_ascii=False, indent=2)
+                                    st.rerun()
                     
     with p_tab2:
         st.subheader("🏆 Live-Tabelle")
