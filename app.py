@@ -17,10 +17,9 @@ st.markdown("""
 <style>
     .block-container {
         padding-top: 1.2rem !important;
-        padding-bottom: 2rem !important;
+        padding-bottom: 5.5rem !important;
         max-width: 1100px;
     }
-    /* Störende Streamlit- & GitHub-Buttons oben rechts und unten rechts ausblenden */
     [data-testid="stToolbar"],
     [data-testid="stDecoration"],
     [data-testid="stStatusWidget"],
@@ -160,7 +159,6 @@ with head_col3:
             st.session_state.show_login = False
             st.rerun()
 
-# Direktes Login-Feld oben (funktioniert auf jedem Smartphone ohne Seitenleiste)
 if st.session_state.show_login and not st.session_state.is_admin:
     with st.container(border=True):
         lc1, lc2 = st.columns([3, 1])
@@ -263,13 +261,6 @@ STÄRKE_LABELS = {
 }
 
 def get_power_rating(spieler):
-    """
-    5-stufige Spielstärken-Skala (0–4) inkl. Zwischenstufe für Jugendspieler (16-17):
-    Mann Erw.:    0 = 12.5 | 1 = 10.3 | 2 = 8.6 | 3 = 6.8 | 4 = 4.0
-    Mann Jugend:  0 = 11.2 | 1 =  9.1 | 2 = 7.5 | 3 = 5.8 | 4 = 3.5
-    Frau Erw.:    0 = 10.3 | 1 =  8.5 | 2 = 6.8 | 3 = 5.0 | 4 = 2.8
-    Frau Jugend:  0 =  9.2 | 1 =  7.3 | 2 = 5.8 | 3 = 4.2 | 4 = 2.4
-    """
     st_val = spieler["Stärke"]
     ist_jugend = spieler.get("Jugend", False)
     if spieler["Geschlecht"] == "m":
@@ -439,20 +430,23 @@ def berechne_tabelle_df():
     stats = {s["Name"]: {"Name": s["Name"], "Spiele": 0, "Siege": 0, "Plus": 0, "Minus": 0} for s in st.session_state.spieler}
     for r in st.session_state.runden:
         for m in r["Matches"]:
-            if m["Erfasst"] and (m["Punkte1"] > 0 or m["Punkte2"] > 0):
-                p1, p2 = m["Punkte1"], m["Punkte2"]
+            # Zählt sowohl gemeldete als auch bestätigte Ergebnisse sofort in die Tabelle!
+            if (m.get("Erfasst", False) or m.get("Gemeldet", False)) and (m["Punkte1"] > 0 or m["Punkte2"] > 0):
+                p1, p2 = int(m["Punkte1"]), int(m["Punkte2"])
                 for name in m["Team1"]:
-                    stats[name]["Spiele"] += 1
-                    stats[name]["Plus"] += p1
-                    stats[name]["Minus"] += p2
-                    if p1 > p2:
-                        stats[name]["Siege"] += 1
+                    if name in stats:
+                        stats[name]["Spiele"] += 1
+                        stats[name]["Plus"] += p1
+                        stats[name]["Minus"] += p2
+                        if p1 > p2:
+                            stats[name]["Siege"] += 1
                 for name in m["Team2"]:
-                    stats[name]["Spiele"] += 1
-                    stats[name]["Plus"] += p2
-                    stats[name]["Minus"] += p1
-                    if p2 > p1:
-                        stats[name]["Siege"] += 1
+                    if name in stats:
+                        stats[name]["Spiele"] += 1
+                        stats[name]["Plus"] += p2
+                        stats[name]["Minus"] += p1
+                        if p2 > p1:
+                            stats[name]["Siege"] += 1
                         
     tabelle = []
     for s in stats.values():
@@ -618,24 +612,31 @@ if st.session_state.is_admin:
                         
                         with c3:
                             if m["Erfasst"]:
-                                st.success("✅ Bestätigt")
+                                st.success(f"✅ {m['Punkte1']}:{m['Punkte2']}")
                             elif m.get("Gemeldet", False):
-                                st.warning(f"🔔 Gemeldet: {m['Punkte1']}:{m['Punkte2']}")
+                                st.info(f"📲 {m['Punkte1']}:{m['Punkte2']}")
                             else:
                                 st.caption("⏳ Offen")
                                 
                         with c4:
+                            # Eindeutiger Key inkl. aktuellem Punktestand verhindert veraltete 0-Werte!
                             sc1, sc2 = st.columns(2)
-                            p1 = sc1.number_input("T1", min_value=0, max_value=99, value=m["Punkte1"], key=f"r{r_idx}_m{m_idx}_p1", label_visibility="collapsed")
-                            p2 = sc2.number_input("T2", min_value=0, max_value=99, value=m["Punkte2"], key=f"r{r_idx}_m{m_idx}_p2", label_visibility="collapsed")
+                            p1 = sc1.number_input(
+                                "T1", min_value=0, max_value=99, value=int(m["Punkte1"]),
+                                key=f"r{r_idx}_m{m_idx}_p1_{m['Punkte1']}_{m['Punkte2']}", label_visibility="collapsed"
+                            )
+                            p2 = sc2.number_input(
+                                "T2", min_value=0, max_value=99, value=int(m["Punkte2"]),
+                                key=f"r{r_idx}_m{m_idx}_p2_{m['Punkte1']}_{m['Punkte2']}", label_visibility="collapsed"
+                            )
                         with c5:
                             btn_text = "✅ Bestätigen" if m.get("Gemeldet", False) and not m["Erfasst"] else "💾 Speichern"
                             if st.button(btn_text, key=f"save_r{r_idx}_m{m_idx}", use_container_width=True):
-                                runde["Matches"][m_idx]["Punkte1"] = p1
-                                runde["Matches"][m_idx]["Punkte2"] = p2
+                                runde["Matches"][m_idx]["Punkte1"] = int(p1)
+                                runde["Matches"][m_idx]["Punkte2"] = int(p2)
                                 runde["Matches"][m_idx]["Erfasst"] = True
                                 daten_speichern()
-                                st.toast(f"Platz {m['Platz']} in Tabelle übernommen!")
+                                st.toast(f"Platz {m['Platz']} gespeichert!")
                                 st.rerun()
 
     with tab3:
@@ -675,7 +676,7 @@ else:
                 if m["Erfasst"]:
                     status_html = f'<span style="color:#4ade80; font-weight:700;">✅ {m["Punkte1"]} : {m["Punkte2"]}</span>'
                 elif m.get("Gemeldet", False):
-                    status_html = f'<span style="color:#fbbf24; font-weight:700;">⏳ {m["Punkte1"]} : {m["Punkte2"]} (gemeldet)</span>'
+                    status_html = f'<span style="color:#38bdf8; font-weight:700;">📲 {m["Punkte1"]} : {m["Punkte2"]}</span>'
                 else:
                     status_html = '<span style="color:#94a3b8;">Läuft</span>'
                     
@@ -709,8 +710,8 @@ else:
                             if mp1 == 0 and mp2 == 0:
                                 st.warning("Bitte Punkte eingeben.")
                             else:
-                                st.session_state.runden[r_idx]["Matches"][m_idx]["Punkte1"] = mp1
-                                st.session_state.runden[r_idx]["Matches"][m_idx]["Punkte2"] = mp2
+                                st.session_state.runden[r_idx]["Matches"][m_idx]["Punkte1"] = int(mp1)
+                                st.session_state.runden[r_idx]["Matches"][m_idx]["Punkte2"] = int(mp2)
                                 st.session_state.runden[r_idx]["Matches"][m_idx]["Gemeldet"] = True
                                 daten_speichern()
                                 st.rerun()
@@ -728,5 +729,5 @@ else:
             for r in reversed(st.session_state.runden):
                 with st.expander(f"Runde {r['Runde']} (Pause: {', '.join(r['Pause']) if r['Pause'] else '-'})", expanded=False):
                     for m in r["Matches"]:
-                        erg = f" → **{m['Punkte1']}:{m['Punkte2']}**" if m["Erfasst"] else ""
+                        erg = f" → **{m['Punkte1']}:{m['Punkte2']}**" if (m["Erfasst"] or m.get("Gemeldet", False)) else ""
                         st.write(f"**Platz {m['Platz']}:** {m['Team1'][0]} & {m['Team1'][1]} vs. {m['Team2'][0]} & {m['Team2'][1]}{erg}")
