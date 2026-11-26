@@ -173,83 +173,98 @@ if st.session_state.show_login and not st.session_state.is_admin:
                 else:
                     st.error("Falsches Passwort")
 
-# --- GROSSER LIVE-SEKUNDEN-TIMER (20 MINUTEN) ---
-timer_aktiv = st.session_state.timer_end is not None
+# --- AUTONOMER LIVE-TIMER (SYNCHRONISIERT SICH ALLE 3 SEKUNDEN SELBST) ---
+@st.fragment(run_every=3)
+def render_live_timer():
+    aktuelle_daten = daten_laden()
+    aktuelles_timer_end = aktuelle_daten.get("timer_end", None)
+    st.session_state.timer_end = aktuelles_timer_end
+    timer_aktiv = aktuelles_timer_end is not None
 
-if st.session_state.is_admin:
-    t_col1, t_col2 = st.columns([2, 1])
-    with t_col2:
-        if st.button(
-            "▶️ 20-Min.-Timer starten",
-            type="primary",
-            use_container_width=True,
-            disabled=timer_aktiv
-        ):
-            st.session_state.timer_end = time.time() + 20 * 60
-            daten_speichern()
-            st.rerun()
-        if st.button(
-            "⏹️ Timer stoppen / Reset",
-            use_container_width=True,
-            disabled=not timer_aktiv
-        ):
-            st.session_state.timer_end = None
-            daten_speichern()
-            st.rerun()
-    timer_container = t_col1
-else:
-    timer_container = st.container()
-
-with timer_container:
-    if st.session_state.timer_end:
-        end_ms = int(st.session_state.timer_end * 1000)
-        timer_html = f"""
-        <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #38bdf8; padding: 12px; border-radius: 14px; text-align: center; font-family: sans-serif; border: 2px solid #38bdf8; box-shadow: 0 4px 12px rgba(56, 189, 248, 0.15);">
-            <div style="font-size: 12px; letter-spacing: 1.5px; color: #94a3b8; margin-bottom: 2px;">VERBLEIBENDE RUNDENZEIT</div>
-            <div id="countdown" style="font-size: 48px; font-weight: 800; letter-spacing: 3px; line-height: 1.1;">20:00</div>
-        </div>
-        <script>
-            var endTime = {end_ms};
-            var alarmGespielt = false;
-            function updateTimer() {{
-                var now = new Date().getTime();
-                var distance = endTime - now;
-                var el = document.getElementById("countdown");
-                if (!el) return;
-                if (distance <= 0) {{
-                    el.innerHTML = "00:00 · ZEIT UM!";
-                    el.style.color = "#ef4444";
-                    el.parentElement.style.borderColor = "#ef4444";
-                    if (!alarmGespielt) {{
-                        alarmGespielt = true;
-                        try {{
-                            var ctx = new (window.AudioContext || window.webkitAudioContext)();
-                            var osc = ctx.createOscillator();
-                            osc.type = "sine";
-                            osc.frequency.setValueAtTime(880, ctx.currentTime);
-                            osc.connect(ctx.destination);
-                            osc.start();
-                            osc.stop(ctx.currentTime + 1.2);
-                        }} catch(e) {{}}
-                    }}
-                    return;
-                }}
-                var minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
-                var seconds = Math.floor((distance % (1000 * 60)) / 1000);
-                el.innerHTML = (minutes < 10 ? "0" : "") + minutes + ":" + (seconds < 10 ? "0" : "") + seconds;
-            }}
-            updateTimer();
-            setInterval(updateTimer, 250);
-        </script>
-        """
-        components.html(timer_html, height=108)
+    if st.session_state.is_admin:
+        t_col1, t_col2 = st.columns([2, 1])
+        with t_col2:
+            if st.button(
+                "▶️ 20-Min.-Timer starten",
+                type="primary",
+                use_container_width=True,
+                disabled=timer_aktiv,
+                key="btn_start_timer"
+            ):
+                neu = daten_laden()
+                neu["timer_end"] = time.time() + 20 * 60
+                with open(DATEI_SPEICHER, "w", encoding="utf-8") as f:
+                    json.dump(neu, f, ensure_ascii=False, indent=2)
+                st.session_state.timer_end = neu["timer_end"]
+                st.rerun()
+            if st.button(
+                "⏹️ Timer stoppen / Reset",
+                use_container_width=True,
+                disabled=not timer_aktiv,
+                key="btn_stop_timer"
+            ):
+                neu = daten_laden()
+                neu["timer_end"] = None
+                with open(DATEI_SPEICHER, "w", encoding="utf-8") as f:
+                    json.dump(neu, f, ensure_ascii=False, indent=2)
+                st.session_state.timer_end = None
+                st.rerun()
+        timer_container = t_col1
     else:
-        components.html("""
-        <div style="background-color: #1e293b; color: #94a3b8; padding: 12px; border-radius: 14px; text-align: center; font-family: sans-serif; border: 1px dashed #475569;">
-            <div style="font-size: 12px; letter-spacing: 1.5px; margin-bottom: 2px;">RUNDEN-TIMER</div>
-            <div style="font-size: 48px; font-weight: 800; letter-spacing: 3px; line-height: 1.1;">20:00</div>
-        </div>
-        """, height=108)
+        timer_container = st.container()
+
+    with timer_container:
+        if aktuelles_timer_end:
+            end_ms = int(aktuelles_timer_end * 1000)
+            timer_html = f"""
+            <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #38bdf8; padding: 12px; border-radius: 14px; text-align: center; font-family: sans-serif; border: 2px solid #38bdf8; box-shadow: 0 4px 12px rgba(56, 189, 248, 0.15);">
+                <div style="font-size: 12px; letter-spacing: 1.5px; color: #94a3b8; margin-bottom: 2px;">VERBLEIBENDE RUNDENZEIT</div>
+                <div id="countdown" style="font-size: 48px; font-weight: 800; letter-spacing: 3px; line-height: 1.1;">20:00</div>
+            </div>
+            <script>
+                var endTime = {end_ms};
+                var alarmGespielt = false;
+                function updateTimer() {{
+                    var now = new Date().getTime();
+                    var distance = endTime - now;
+                    var el = document.getElementById("countdown");
+                    if (!el) return;
+                    if (distance <= 0) {{
+                        el.innerHTML = "00:00 · ZEIT UM!";
+                        el.style.color = "#ef4444";
+                        el.parentElement.style.borderColor = "#ef4444";
+                        if (!alarmGespielt) {{
+                            alarmGespielt = true;
+                            try {{
+                                var ctx = new (window.AudioContext || window.webkitAudioContext)();
+                                var osc = ctx.createOscillator();
+                                osc.type = "sine";
+                                osc.frequency.setValueAtTime(880, ctx.currentTime);
+                                osc.connect(ctx.destination);
+                                osc.start();
+                                osc.stop(ctx.currentTime + 1.2);
+                            }} catch(e) {{}}
+                        }}
+                        return;
+                    }}
+                    var minutes = Math.floor((distance % (1000 * 60 * 60)) / (1000 * 60));
+                    var seconds = Math.floor((distance % (1000 * 60)) / 1000);
+                    el.innerHTML = (minutes < 10 ? "0" : "") + minutes + ":" + (seconds < 10 ? "0" : "") + seconds;
+                }}
+                updateTimer();
+                setInterval(updateTimer, 250);
+            </script>
+            """
+            components.html(timer_html, height=108)
+        else:
+            components.html("""
+            <div style="background-color: #1e293b; color: #94a3b8; padding: 12px; border-radius: 14px; text-align: center; font-family: sans-serif; border: 1px dashed #475569;">
+                <div style="font-size: 12px; letter-spacing: 1.5px; margin-bottom: 2px;">RUNDEN-TIMER</div>
+                <div style="font-size: 48px; font-weight: 800; letter-spacing: 3px; line-height: 1.1;">20:00</div>
+            </div>
+            """, height=108)
+
+render_live_timer()
 
 # --- HILFSFUNKTIONEN FÜR REALISTISCHE SPIELSTÄRKE & AUSLOSUNG ---
 STÄRKE_LABELS = {
@@ -420,6 +435,7 @@ def generiere_runde(spieler_liste, plaetze=5):
                     "Punkte1": 0,
                     "Punkte2": 0,
                     "Gemeldet": False,
+                    "Gemeldet_um": None,
                     "Erfasst": False
                 })
             beste_loesung = (formatierte_matches, [p["Name"] for p in pause])
@@ -430,7 +446,6 @@ def berechne_tabelle_df():
     stats = {s["Name"]: {"Name": s["Name"], "Spiele": 0, "Siege": 0, "Plus": 0, "Minus": 0} for s in st.session_state.spieler}
     for r in st.session_state.runden:
         for m in r["Matches"]:
-            # Zählt sowohl gemeldete als auch bestätigte Ergebnisse sofort in die Tabelle!
             if (m.get("Erfasst", False) or m.get("Gemeldet", False)) and (m["Punkte1"] > 0 or m["Punkte2"] > 0):
                 p1, p2 = int(m["Punkte1"]), int(m["Punkte2"])
                 for name in m["Team1"]:
@@ -619,7 +634,6 @@ if st.session_state.is_admin:
                                 st.caption("⏳ Offen")
                                 
                         with c4:
-                            # Eindeutiger Key inkl. aktuellem Punktestand verhindert veraltete 0-Werte!
                             sc1, sc2 = st.columns(2)
                             p1 = sc1.number_input(
                                 "T1", min_value=0, max_value=99, value=int(m["Punkte1"]),
@@ -668,6 +682,7 @@ else:
                 prefix = "⭐ DU HAST PAUSE:" if hat_pause else "☕ Pause:"
                 st.markdown(f'<div class="{pause_class}"><strong>{prefix}</strong> {", ".join(aktuelle["Pause"])}</div>', unsafe_allow_html=True)
                 
+            jetzt = time.time()
             for m_idx, m in enumerate(aktuelle["Matches"]):
                 alle_im_match = m["Team1"] + m["Team2"]
                 ist_mein_spiel = mein_name in alle_im_match
@@ -699,21 +714,48 @@ else:
                 """
                 st.markdown(card_html, unsafe_allow_html=True)
                 
-                if not m["Erfasst"] and not m.get("Gemeldet", False):
-                    with st.expander(f"📝 Ergebnis Platz {m['Platz']} melden"):
+                # Prüfen, ob noch nie gemeldet ODER innerhalb des 5-Minuten-Korrekturfensters
+                gemeldet_um = m.get("Gemeldet_um", None)
+                rest_korrektur_sek = int(300 - (jetzt - gemeldet_um)) if (m.get("Gemeldet", False) and gemeldet_um) else 0
+                darf_korrigieren = (not m["Erfasst"]) and m.get("Gemeldet", False) and (rest_korrektur_sek > 0)
+                
+                if (not m["Erfasst"] and not m.get("Gemeldet", False)) or darf_korrigieren:
+                    if darf_korrektur := darf_korrigieren:
+                        min_rest = rest_korrektur_sek // 60
+                        sek_rest = rest_korrektur_sek % 60
+                        expander_titel = f"✏️ Ergebnis Platz {m['Platz']} korrigieren (noch {min_rest}:{sek_rest:02d} Min.)"
+                    else:
+                        expander_titel = f"📝 Ergebnis Platz {m['Platz']} melden"
+                        
+                    with st.expander(expander_titel):
                         ic1, ic2 = st.columns(2)
                         with ic1:
-                            mp1 = st.number_input(f"🟢 {m['Team1'][0].split()[0]} & {m['Team1'][1].split()[0]}", min_value=0, max_value=99, value=0, key=f"player_p1_{r_idx}_{m_idx}")
+                            mp1 = st.number_input(
+                                f"🟢 {m['Team1'][0].split()[0]} & {m['Team1'][1].split()[0]}",
+                                min_value=0, max_value=99, value=int(m["Punkte1"]),
+                                key=f"player_p1_{r_idx}_{m_idx}_{m['Punkte1']}"
+                            )
                         with ic2:
-                            mp2 = st.number_input(f"🔵 {m['Team2'][0].split()[0]} & {m['Team2'][1].split()[0]}", min_value=0, max_value=99, value=0, key=f"player_p2_{r_idx}_{m_idx}")
-                        if st.button(f"📤 Ergebnis Platz {m['Platz']} absenden", key=f"send_{r_idx}_{m_idx}", type="primary", use_container_width=True):
+                            mp2 = st.number_input(
+                                f"🔵 {m['Team2'][0].split()[0]} & {m['Team2'][1].split()[0]}",
+                                min_value=0, max_value=99, value=int(m["Punkte2"]),
+                                key=f"player_p2_{r_idx}_{m_idx}_{m['Punkte2']}"
+                            )
+                        btn_label = f"🔄 Korrigiertes Ergebnis Platz {m['Platz']} speichern" if darf_korrigieren else f"📤 Ergebnis Platz {m['Platz']} absenden"
+                        if st.button(btn_label, key=f"send_{r_idx}_{m_idx}", type="primary", use_container_width=True):
                             if mp1 == 0 and mp2 == 0:
                                 st.warning("Bitte Punkte eingeben.")
                             else:
-                                st.session_state.runden[r_idx]["Matches"][m_idx]["Punkte1"] = int(mp1)
-                                st.session_state.runden[r_idx]["Matches"][m_idx]["Punkte2"] = int(mp2)
-                                st.session_state.runden[r_idx]["Matches"][m_idx]["Gemeldet"] = True
-                                daten_speichern()
+                                # Aktuellen Stand frisch laden, damit parallele Eingaben anderer Plätze nicht überschrieben werden
+                                frisch = daten_laden()
+                                match_ref = frisch["runden"][r_idx]["Matches"][m_idx]
+                                match_ref["Punkte1"] = int(mp1)
+                                match_ref["Punkte2"] = int(mp2)
+                                match_ref["Gemeldet"] = True
+                                if not match_ref.get("Gemeldet_um"):
+                                    match_ref["Gemeldet_um"] = time.time()
+                                with open(DATEI_SPEICHER, "w", encoding="utf-8") as f:
+                                    json.dump(frisch, f, ensure_ascii=False, indent=2)
                                 st.rerun()
                     
     with p_tab2:
