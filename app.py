@@ -441,9 +441,97 @@ def generiere_runde(spieler_liste, plaetze=5):
             
     return beste_loesung
 
+def berechne_spieler_historie_neu():
+    """Berechnet Spiele, Pausen, Partner und Gegner aus allen Runden sauber neu."""
+    name_zu_spieler = {s["Name"]: s for s in st.session_state.spieler}
+    for s in st.session_state.spieler:
+        s["Spiele"] = 0
+        s["Pausen"] = 0
+        s["Letzte_Pause"] = False
+        s["Partner"] = []
+        s["Gegner"] = []
+
+    for r in st.session_state.runden:
+        for p_name in r.get("Pause", []):
+            if p_name in name_zu_spieler:
+                name_zu_spieler[p_name]["Pausen"] += 1
+                name_zu_spieler[p_name]["Letzte_Pause"] = True
+        for m in r["Matches"]:
+            t1_a, t1_b = m["Team1"]
+            t2_a, t2_b = m["Team2"]
+            for name in [t1_a, t1_b, t2_a, t2_b]:
+                if name in name_zu_spieler:
+                    name_zu_spieler[name]["Spiele"] += 1
+                    name_zu_spieler[name]["Letzte_Pause"] = False
+            if t1_a in name_zu_spieler and t1_b in name_zu_spieler:
+                name_zu_spieler[t1_a]["Partner"].append(t1_b)
+                name_zu_spieler[t1_b]["Partner"].append(t1_a)
+            if t2_a in name_zu_spieler and t2_b in name_zu_spieler:
+                name_zu_spieler[t2_a]["Partner"].append(t2_b)
+                name_zu_spieler[t2_b]["Partner"].append(t2_a)
+            for a in [t1_a, t1_b]:
+                for b in [t2_a, t2_b]:
+                    if a in name_zu_spieler and b in name_zu_spieler:
+                        name_zu_spieler[a]["Gegner"].append(b)
+                        name_zu_spieler[b]["Gegner"].append(a)
+
+def pruefe_runden_kollisionen(r_idx):
+    """Prüft die gewählte Runde gegen alle bisherigen Runden auf Doppelungen & Balance."""
+    warnungen = []
+    name_zu_spieler = {s["Name"]: s for s in st.session_state.spieler}
+    vorherige_runden = st.session_state.runden[:r_idx]
+    aktuelle_runde = st.session_state.runden[r_idx]
+
+    partner_verlauf = {}
+    gegner_verlauf = {}
+    pause_vorrunde = set()
+
+    for prev_i, prev_r in enumerate(vorherige_runden):
+        if prev_i == r_idx - 1:
+            pause_vorrunde = set(prev_r.get("Pause", []))
+        for m in prev_r["Matches"]:
+            for team in [m["Team1"], m["Team2"]]:
+                key_p = tuple(sorted(team))
+                partner_verlauf[key_p] = partner_verlauf.get(key_p, 0) + 1
+            for a in m["Team1"]:
+                for b in m["Team2"]:
+                    key_g = tuple(sorted([a, b]))
+                    gegner_verlauf[key_g] = gegner_verlauf.get(key_g, 0) + 1
+
+    for p_name in aktuelle_runde.get("Pause", []):
+        if p_name in pause_vorrunde:
+            warnungen.append(f"☕ **{p_name}** hatte bereits in der Vorrunde Pause (Doppelpause!).")
+
+    for m in aktuelle_runde["Matches"]:
+        platz = m["Platz"]
+        for team in [m["Team1"], m["Team2"]]:
+            key_p = tuple(sorted(team))
+            if partner_verlauf.get(key_p, 0) >= 1:
+                warnungen.append(f"🤝 **Platz {platz}:** {team[0]} & {team[1]} haben bereits zusammen als Doppel gespielt.")
+        for a in m["Team1"]:
+            for b in m["Team2"]:
+                key_g = tuple(sorted([a, b]))
+                bisher = gegner_verlauf.get(key_g, 0)
+                if bisher >= 2:
+                    warnungen.append(f"⚔️ **Platz {platz}:** {a} vs. {b} treffen bereits zum {bisher + 1}. Mal aufeinander.")
+                elif bisher == 1:
+                    warnungen.append(f"ℹ️ **Platz {platz}:** {a} & {b} standen sich schon 1x als Gegner gegenüber.")
+
+        if all(n in name_zu_spieler for n in m["Team1"] + m["Team2"]):
+            r1 = get_power_rating(name_zu_spieler[m["Team1"][0]]) + get_power_rating(name_zu_spieler[m["Team1"][1]])
+            r2 = get_power_rating(name_zu_spieler[m["Team2"][0]]) + get_power_rating(name_zu_spieler[m["Team2"][1]])
+            diff = abs(r1 - r2)
+            if diff > 2.5:
+                warnungen.append(f"⚖️ **Platz {platz}:** Deutlicher Spielstärke-Unterschied ({r1:.1f} vs. {r2:.1f} Punkte).")
+
+    return warnungen
+
 def berechne_tabelle_df():
     stats = {s["Name"]: {"Name": s["Name"], "Spiele": 0, "Siege": 0, "Plus": 0, "Minus": 0} for s in st.session_state.spieler}
     for r in st.session_state.runden:
+        # Nur freigegebene Runden in der Tabelle berücksichtigen
+        if not r.get("Freigegeben", True):
+            continue
         for m in r["Matches"]:
             if (m.get("Erfasst", False) or m.get("Gemeldet", False)) and (m["Punkte1"] > 0 or m["Punkte2"] > 0):
                 p1, p2 = int(m["Punkte1"]), int(m["Punkte2"])
@@ -532,7 +620,6 @@ if st.session_state.is_admin:
                 sc2.write(f"{'Herr' if s['Geschlecht']=='m' else 'Dame'}")
                 
                 with sc3:
-                    # Eindeutiger Key über den Spielernamen verhindert Verschiebungen beim Löschen!
                     aktuelle_st = s["Stärke"] if s["Stärke"] in [0, 1, 2, 3, 4] else 3
                     neue_staerke = st.selectbox(
                         "Stärke", [0, 1, 2, 3, 4], index=aktuelle_st,
@@ -588,38 +675,63 @@ if st.session_state.is_admin:
         if aktive_anzahl < 4:
             st.info("Bitte melde zuerst mindestens 4 spielbereite Teilnehmer an.")
         else:
+            hat_unveroeffentlichte = any(not r.get("Freigegeben", True) for r in st.session_state.runden)
             if len(st.session_state.runden) < 6:
-                if st.button(f"🎲 Runde {len(st.session_state.runden) + 1} auslosen", type="primary"):
-                    matches, pausierende = generiere_runde(st.session_state.spieler, plaetze=5)
-                    name_zu_spieler = {s["Name"]: s for s in st.session_state.spieler}
-                    for p_name in pausierende:
-                        name_zu_spieler[p_name]["Pausen"] += 1
-                        name_zu_spieler[p_name]["Letzte_Pause"] = True
-                    for m in matches:
-                        t1_a, t1_b = m["Team1"]
-                        t2_a, t2_b = m["Team2"]
-                        for name in [t1_a, t1_b, t2_a, t2_b]:
-                            name_zu_spieler[name]["Spiele"] += 1
-                            name_zu_spieler[name]["Letzte_Pause"] = False
-                        name_zu_spieler[t1_a]["Partner"].append(t1_b)
-                        name_zu_spieler[t1_b]["Partner"].append(t1_a)
-                        name_zu_spieler[t2_a]["Partner"].append(t2_b)
-                        name_zu_spieler[t2_b]["Partner"].append(t2_a)
-                        for a in [t1_a, t1_b]:
-                            for b in [t2_a, t2_b]:
-                                name_zu_spieler[a]["Gegner"].append(b)
-                                name_zu_spieler[b]["Gegner"].append(a)
-                    st.session_state.runden.append({
-                        "Runde": len(st.session_state.runden) + 1,
-                        "Matches": matches,
-                        "Pause": pausierende
-                    })
-                    daten_speichern()
-                    st.rerun()
+                if hat_unveroeffentlichte:
+                    st.warning("Bitte gib zuerst den aktuellen Runden-Entwurf frei (oder verwirf ihn), bevor du die nächste Runde auslost.")
+                else:
+                    if st.button(f"🎲 Runde {len(st.session_state.runden) + 1} als Entwurf auslosen", type="primary"):
+                        matches, pausierende = generiere_runde(st.session_state.spieler, plaetze=5)
+                        st.session_state.runden.append({
+                            "Runde": len(st.session_state.runden) + 1,
+                            "Matches": matches,
+                            "Pause": pausierende,
+                            "Freigegeben": False
+                        })
+                        berechne_spieler_historie_neu()
+                        daten_speichern()
+                        st.rerun()
 
             for r_idx in range(len(st.session_state.runden) - 1, -1, -1):
                 runde = st.session_state.runden[r_idx]
-                with st.expander(f"Runde {runde['Runde']} (Pause: {', '.join(runde['Pause']) if runde['Pause'] else 'Niemand'})", expanded=(r_idx == len(st.session_state.runden) - 1)):
+                ist_live = runde.get("Freigegeben", True)
+                status_badge = "🟢 LIVE" if ist_live else "🟡 ENTWURF (noch nicht für Teilnehmer sichtbar)"
+                
+                with st.expander(f"Runde {runde['Runde']} · {status_badge} (Pause: {', '.join(runde['Pause']) if runde['Pause'] else 'Niemand'})", expanded=(r_idx == len(st.session_state.runden) - 1)):
+                    
+                    # --- FREIGABE-LEISTE FÜR ENTWÜRFE ---
+                    if not ist_live:
+                        st.warning("🔒 **Vorschau-Modus:** Teilnehmer sehen diese Runde noch nicht. Prüfe die Paarungen und gib sie frei, sobald alles passt.")
+                        f_col1, f_col2, f_col3 = st.columns([2, 1.5, 1.5])
+                        with f_col1:
+                            if st.button(f"📢 Runde {runde['Runde']} jetzt für Teilnehmer freigeben", key=f"pub_r{r_idx}", type="primary", use_container_width=True):
+                                st.session_state.runden[r_idx]["Freigegeben"] = True
+                                daten_speichern()
+                                st.toast(f"Runde {runde['Runde']} ist jetzt live!")
+                                st.rerun()
+                        with f_col2:
+                            if st.button("🎲 Neu auslosen", key=f"reroll_r{r_idx}", use_container_width=True):
+                                # Temporär diese Runde entfernen, damit die Historie sauber stimmt
+                                st.session_state.runden.pop(r_idx)
+                                berechne_spieler_historie_neu()
+                                matches, pausierende = generiere_runde(st.session_state.spieler, plaetze=5)
+                                st.session_state.runden.append({
+                                    "Runde": r_idx + 1,
+                                    "Matches": matches,
+                                    "Pause": pausierende,
+                                    "Freigegeben": False
+                                })
+                                berechne_spieler_historie_neu()
+                                daten_speichern()
+                                st.rerun()
+                        with f_col3:
+                            if st.button("🗑️ Entwurf verwerfen", key=f"drop_r{r_idx}", use_container_width=True):
+                                st.session_state.runden.pop(r_idx)
+                                berechne_spieler_historie_neu()
+                                daten_speichern()
+                                st.rerun()
+                        st.markdown("---")
+
                     for m_idx, m in enumerate(runde["Matches"]):
                         c1, c2, c3, c4, c5 = st.columns([1.4, 3.5, 1.5, 1.8, 1.4])
                         c1.markdown(f"**Platz {m['Platz']}** ({m.get('Typ', '')})")
@@ -653,6 +765,60 @@ if st.session_state.is_admin:
                                 st.toast(f"Platz {m['Platz']} gespeichert!")
                                 st.rerun()
 
+                    # --- MANUELLE PAARUNGS-ANPASSUNG + KOLLISIONSPRÜFUNG ---
+                    st.markdown("---")
+                    with st.expander(f"🔀 Paarungen in Runde {runde['Runde']} manuell tauschen & Doppelungen prüfen", expanded=(not ist_live)):
+                        alle_in_runde = []
+                        positionen = {}
+                        for m_i, match in enumerate(runde["Matches"]):
+                            for t_key, team_bez in [("Team1", "Team 1"), ("Team2", "Team 2")]:
+                                for s_i, sp_name in enumerate(match[t_key]):
+                                    label = f"{sp_name} (Platz {match['Platz']} · {team_bez})"
+                                    alle_in_runde.append(label)
+                                    positionen[label] = ("match", m_i, t_key, s_i, sp_name)
+                        for p_i, p_name in enumerate(runde.get("Pause", [])):
+                            label = f"{p_name} (☕ Pause)"
+                            alle_in_runde.append(label)
+                            positionen[label] = ("pause", p_i, None, None, p_name)
+
+                        if len(alle_in_runde) >= 2:
+                            sw1, sw2, sw3 = st.columns([2.2, 2.2, 1.3])
+                            with sw1:
+                                auswahl_a = st.selectbox("Spieler A", alle_in_runde, key=f"swap_a_{r_idx}", label_visibility="collapsed")
+                            with sw2:
+                                auswahl_b = st.selectbox("Spieler B", alle_in_runde, index=1, key=f"swap_b_{r_idx}", label_visibility="collapsed")
+                            with sw3:
+                                if st.button("🔄 Plätze tauschen", key=f"do_swap_{r_idx}", use_container_width=True):
+                                    if auswahl_a == auswahl_b:
+                                        st.warning("Bitte zwei unterschiedliche Spieler wählen.")
+                                    else:
+                                        pos_a = positionen[auswahl_a]
+                                        pos_b = positionen[auswahl_b]
+                                        name_a = pos_a[4]
+                                        name_b = pos_b[4]
+
+                                        if pos_a[0] == "match":
+                                            runde["Matches"][pos_a[1]][pos_a[2]][pos_a[3]] = name_b
+                                        else:
+                                            runde["Pause"][pos_a[1]] = name_b
+
+                                        if pos_b[0] == "match":
+                                            runde["Matches"][pos_b[1]][pos_b[2]][pos_b[3]] = name_a
+                                        else:
+                                            runde["Pause"][pos_b[1]] = name_a
+
+                                        berechne_spieler_historie_neu()
+                                        daten_speichern()
+                                        st.toast(f"{name_a} ↔ {name_b} getauscht!")
+                                        st.rerun()
+
+                        # Automatische Live-Prüfung auf Doppelungen & Balance
+                        warnungen = pruefe_runden_kollisionen(r_idx)
+                        if warnungen:
+                            st.warning("**Automatischer Check (Hinweise zu dieser Runde):**\n\n" + "\n".join(f"- {w}" for w in warnungen))
+                        else:
+                            st.success("✅ **Check bestanden:** Keine doppelten Partner, keine Mehrfach-Gegner und ausgeglichene Spielstärken.")
+
     with tab3:
         st.subheader("🏆 Live-Tabelle")
         if st.session_state.spieler:
@@ -664,12 +830,14 @@ if st.session_state.is_admin:
 else:
     p_tab1, p_tab2, p_tab3 = st.tabs(["🎾 Aktuelle Runde", "🏆 Tabelle", "📋 Alle Runden"])
     
+    # Teilnehmer sehen ausschließlich freigegebene Runden!
+    sichtbare_runden = [(idx, r) for idx, r in enumerate(st.session_state.runden) if r.get("Freigegeben", True)]
+    
     with p_tab1:
-        if not st.session_state.runden:
-            st.info("Das Turnier startet gleich – sobald Runde 1 ausgelost ist, erscheinen hier eure Plätze und Paarungen.")
+        if not sichtbare_runden:
+            st.info("Das Turnier startet gleich – sobald Runde 1 freigegeben ist, erscheinen hier eure Plätze und Paarungen.")
         else:
-            r_idx = len(st.session_state.runden) - 1
-            aktuelle = st.session_state.runden[r_idx]
+            r_idx, aktuelle = sichtbare_runden[-1]
             
             alle_namen = ["— Alle Plätze anzeigen —"] + sorted([s["Name"] for s in st.session_state.spieler])
             mein_name = st.selectbox("🔍 Deinen Namen hervorheben:", alle_namen, label_visibility="collapsed")
@@ -796,10 +964,10 @@ else:
             
     with p_tab3:
         st.subheader("Alle bisherigen Runden")
-        if not st.session_state.runden:
-            st.write("Noch keine Runden gespielt.")
+        if not sichtbare_runden:
+            st.write("Noch keine Runden freigegeben.")
         else:
-            for r in reversed(st.session_state.runden):
+            for _, r in reversed(sichtbare_runden):
                 with st.expander(f"Runde {r['Runde']} (Pause: {', '.join(r['Pause']) if r['Pause'] else '-'})", expanded=False):
                     for m in r["Matches"]:
                         erg = f" → **{m['Punkte1']}:{m['Punkte2']}**" if (m["Erfasst"] or m.get("Gemeldet", False)) else ""
