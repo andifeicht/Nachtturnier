@@ -5,6 +5,7 @@ import random
 import time
 import json
 import os
+import copy
 
 # Seiten-Konfiguration (kompakt für Handy & Desktop)
 st.set_page_config(page_title="Gaudi-Nachtturnier", page_icon="🎾", layout="wide", initial_sidebar_state="collapsed")
@@ -529,7 +530,6 @@ def pruefe_runden_kollisionen(r_idx):
 def berechne_tabelle_df():
     stats = {s["Name"]: {"Name": s["Name"], "Spiele": 0, "Siege": 0, "Plus": 0, "Minus": 0} for s in st.session_state.spieler}
     for r in st.session_state.runden:
-        # Nur freigegebene Runden in der Tabelle berücksichtigen
         if not r.get("Freigegeben", True):
             continue
         for m in r["Matches"]:
@@ -571,11 +571,24 @@ def berechne_tabelle_df():
     df_tab.index += 1
     return df_tab
 
+def hat_manuelle_aenderung(runde):
+    """Prüft, ob die aktuelle Runde gegenüber der gespeicherten Original-Auslosung verändert wurde."""
+    orig_matches = runde.get("Original_Matches")
+    orig_pause = runde.get("Original_Pause")
+    if orig_matches is None or orig_pause is None:
+        return False
+    if runde.get("Pause", []) != orig_pause:
+        return True
+    for cur_m, org_m in zip(runde["Matches"], orig_matches):
+        if cur_m["Team1"] != org_m["Team1"] or cur_m["Team2"] != org_m["Team2"]:
+            return True
+    return False
+
 # ==============================================================================
 # ANSICHT 1: ADMIN-MODUS (TURNIERLEITUNG)
 # ==============================================================================
 if st.session_state.is_admin:
-    tab1, tab2, tab3 = st.tabs(["1. Teilnehmer", "2. Runden & Ergebnisse", "3. Live-Tabelle"])
+    tab1, tab2, tab3, tab4 = st.tabs(["1. Teilnehmer", "2. Runden & Ergebnisse", "3. Live-Tabelle", "4. Begegnungs-Statistik"])
 
     with tab1:
         st.subheader("Spieler anmelden (max. 30)")
@@ -686,6 +699,8 @@ if st.session_state.is_admin:
                             "Runde": len(st.session_state.runden) + 1,
                             "Matches": matches,
                             "Pause": pausierende,
+                            "Original_Matches": copy.deepcopy(matches),
+                            "Original_Pause": list(pausierende),
                             "Freigegeben": False
                         })
                         berechne_spieler_historie_neu()
@@ -711,7 +726,6 @@ if st.session_state.is_admin:
                                 st.rerun()
                         with f_col2:
                             if st.button("🎲 Neu auslosen", key=f"reroll_r{r_idx}", use_container_width=True):
-                                # Temporär diese Runde entfernen, damit die Historie sauber stimmt
                                 st.session_state.runden.pop(r_idx)
                                 berechne_spieler_historie_neu()
                                 matches, pausierende = generiere_runde(st.session_state.spieler, plaetze=5)
@@ -719,6 +733,8 @@ if st.session_state.is_admin:
                                     "Runde": r_idx + 1,
                                     "Matches": matches,
                                     "Pause": pausierende,
+                                    "Original_Matches": copy.deepcopy(matches),
+                                    "Original_Pause": list(pausierende),
                                     "Freigegeben": False
                                 })
                                 berechne_spieler_historie_neu()
@@ -765,7 +781,7 @@ if st.session_state.is_admin:
                                 st.toast(f"Platz {m['Platz']} gespeichert!")
                                 st.rerun()
 
-                    # --- MANUELLE PAARUNGS-ANPASSUNG + KOLLISIONSPRÜFUNG ---
+                    # --- MANUELLE PAARUNGS-ANPASSUNG + UNDO + KOLLISIONSPRÜFUNG ---
                     st.markdown("---")
                     with st.expander(f"🔀 Paarungen in Runde {runde['Runde']} manuell tauschen & Doppelungen prüfen", expanded=(not ist_live)):
                         alle_in_runde = []
@@ -812,6 +828,18 @@ if st.session_state.is_admin:
                                         st.toast(f"{name_a} ↔ {name_b} getauscht!")
                                         st.rerun()
 
+                        # Undo-Button: Setzt manuelle Täusche auf die ursprüngliche Auslosung dieser Runde zurück
+                        if hat_manuelle_aenderung(runde):
+                            if st.button(f"↩️ Manuelle Änderungen verwerfen & Original-Auslosung Runde {runde['Runde']} wiederherstellen", key=f"undo_swap_{r_idx}", use_container_width=True):
+                                for m_i, orig_m in enumerate(runde["Original_Matches"]):
+                                    runde["Matches"][m_i]["Team1"] = list(orig_m["Team1"])
+                                    runde["Matches"][m_i]["Team2"] = list(orig_m["Team2"])
+                                runde["Pause"] = list(runde["Original_Pause"])
+                                berechne_spieler_historie_neu()
+                                daten_speichern()
+                                st.toast("Ursprüngliche Auslosung wiederhergestellt!")
+                                st.rerun()
+
                         # Automatische Live-Prüfung auf Doppelungen & Balance
                         warnungen = pruefe_runden_kollisionen(r_idx)
                         if warnungen:
@@ -824,13 +852,76 @@ if st.session_state.is_admin:
         if st.session_state.spieler:
             st.dataframe(berechne_tabelle_df(), use_container_width=True)
 
+    with tab4:
+        st.subheader("📊 Partner- & Gegner-Statistik")
+        if not st.session_state.spieler or not st.session_state.runden:
+            st.info("Sobald mindestens eine Runde ausgelost wurde, erscheint hier die komplette Begegnungs-Übersicht.")
+        else:
+            # 1. Doppelungs-Scanner über alle ausgelosten Runden
+            partner_counts = {}
+            gegner_counts = {}
+            for r in st.session_state.runden:
+                for m in r["Matches"]:
+                    for team in [m["Team1"], m["Team2"]]:
+                        kp = tuple(sorted(team))
+                        partner_counts[kp] = partner_counts.get(kp, 0) + 1
+                    for a in m["Team1"]:
+                        for b in m["Team2"]:
+                            kg = tuple(sorted([a, b]))
+                            gegner_counts[kg] = gegner_counts.get(kg, 0) + 1
+
+            mehrfach_partner = [(k, v) for k, v in sorted(partner_counts.items(), key=lambda x: -x[1]) if v >= 2]
+            mehrfach_gegner = [(k, v) for k, v in sorted(gegner_counts.items(), key=lambda x: -x[1]) if v >= 2]
+
+            stat_c1, stat_c2 = st.columns(2)
+            with stat_c1:
+                st.markdown("#### 🤝 Mehrfache Doppel-Partner (≥ 2×)")
+                if mehrfach_partner:
+                    for (p1, p2), cnt in mehrfach_partner:
+                        st.warning(f"**{p1} & {p2}** → **{cnt}×** zusammen")
+                else:
+                    st.success("✅ Bisher hat noch kein Doppel-Team zweimal zusammengespielt!")
+
+            with stat_c2:
+                st.markdown("#### ⚔️ Mehrfache Gegner-Duelle (≥ 2×)")
+                if mehrfach_gegner:
+                    for (p1, p2), cnt in mehrfach_gegner:
+                        if cnt >= 3:
+                            st.error(f"**{p1} vs. {p2}** → **{cnt}×** gegeneinander")
+                        else:
+                            st.info(f"**{p1} vs. {p2}** → **{cnt}×** gegeneinander")
+                else:
+                    st.success("✅ Bisher gab es noch keine wiederholten Gegner-Duelle!")
+
+            st.divider()
+            st.markdown("#### 📋 Gesamtübersicht pro Spieler (über alle ausgelosten Runden)")
+
+            def format_haeufigkeit(namens_liste):
+                if not namens_liste:
+                    return "—"
+                counts = {}
+                for n in namens_liste:
+                    counts[n] = counts.get(n, 0) + 1
+                sortiert = sorted(counts.items(), key=lambda x: (-x[1], x[0]))
+                return ", ".join([f"{n} ({c}×)" if c > 1 else n for n, c in sortiert])
+
+            uebersicht_rows = []
+            for s in sorted(st.session_state.spieler, key=lambda x: x["Name"]):
+                uebersicht_rows.append({
+                    "Spieler": s["Name"],
+                    "Spiele": s["Spiele"],
+                    "Pausen": s["Pausen"],
+                    "Bisherige Partner": format_haeufigkeit(s.get("Partner", [])),
+                    "Bisherige Gegner": format_haeufigkeit(s.get("Gegner", []))
+                })
+            st.dataframe(pd.DataFrame(uebersicht_rows), use_container_width=True, hide_index=True, height=620)
+
 # ==============================================================================
 # ANSICHT 2: TEILNEHMER-MODUS (OPTIMIERT FÜR SMARTPHONES)
 # ==============================================================================
 else:
     p_tab1, p_tab2, p_tab3 = st.tabs(["🎾 Aktuelle Runde", "🏆 Tabelle", "📋 Alle Runden"])
     
-    # Teilnehmer sehen ausschließlich freigegebene Runden!
     sichtbare_runden = [(idx, r) for idx, r in enumerate(st.session_state.runden) if r.get("Freigegeben", True)]
     
     with p_tab1:
