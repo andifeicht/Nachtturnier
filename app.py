@@ -476,6 +476,141 @@ def berechne_spieler_historie_neu():
                         name_zu_spieler[a]["Gegner"].append(b)
                         name_zu_spieler[b]["Gegner"].append(a)
 
+def bewerte_tausch_kandidaten(r_idx, pos_a):
+    """Bewertet alle möglichen Tauschpartner B für den gewählten Spieler A nach allen Turnierkriterien."""
+    name_zu_spieler = {s["Name"]: s for s in st.session_state.spieler}
+    vorherige_runden = st.session_state.runden[:r_idx]
+    aktuelle_runde = st.session_state.runden[r_idx]
+
+    # Historie aus den Runden VOR r_idx aufbauen
+    hist_partner = {s["Name"]: [] for s in st.session_state.spieler}
+    hist_gegner = {s["Name"]: [] for s in st.session_state.spieler}
+    pause_vorrunde = set()
+    for prev_i, prev_r in enumerate(vorherige_runden):
+        if prev_i == r_idx - 1:
+            pause_vorrunde = set(prev_r.get("Pause", []))
+        for m in prev_r["Matches"]:
+            t1a, t1b = m["Team1"]
+            t2a, t2b = m["Team2"]
+            if t1a in hist_partner and t1b in hist_partner:
+                hist_partner[t1a].append(t1b)
+                hist_partner[t1b].append(t1a)
+            if t2a in hist_partner and t2b in hist_partner:
+                hist_partner[t2a].append(t2b)
+                hist_partner[t2b].append(t2a)
+            for x in [t1a, t1b]:
+                for y in [t2a, t2b]:
+                    if x in hist_gegner and y in hist_gegner:
+                        hist_gegner[x].append(y)
+                        hist_gegner[y].append(x)
+
+    # Temporäre Spielerobjekte mit exakt dieser Historie
+    temp_spieler = {}
+    for name, s in name_zu_spieler.items():
+        cp = copy.deepcopy(s)
+        cp["Partner"] = hist_partner.get(name, [])
+        cp["Gegner"] = hist_gegner.get(name, [])
+        temp_spieler[name] = cp
+
+    kandidaten = []
+    alle_pos = []
+    for m_i, match in enumerate(aktuelle_runde["Matches"]):
+        for t_key, team_bez in [("Team1", "Team 1"), ("Team2", "Team 2")]:
+            for s_i, sp_name in enumerate(match[t_key]):
+                alle_pos.append(("match", m_i, t_key, s_i, sp_name, f"Platz {match['Platz']} · {team_bez}"))
+    for p_i, p_name in enumerate(aktuelle_runde.get("Pause", [])):
+        alle_pos.append(("pause", p_i, None, None, p_name, "☕ Pause"))
+
+    name_a = pos_a[4]
+    sp_a = temp_spieler.get(name_a)
+
+    for pos_b in alle_pos:
+        name_b = pos_b[4]
+        if name_a == name_b:
+            continue
+
+        # Simuliere Tausch A <-> B
+        sim_matches = copy.deepcopy(aktuelle_runde["Matches"])
+        sim_pause = list(aktuelle_runde.get("Pause", []))
+
+        if pos_a[0] == "match":
+            sim_matches[pos_a[1]][pos_a[2]][pos_a[3]] = name_b
+        else:
+            sim_pause[pos_a[1]] = name_b
+
+        if pos_b[0] == "match":
+            sim_matches[pos_b[1]][pos_b[2]][pos_b[3]] = name_a
+        else:
+            sim_pause[pos_b[1]] = name_a
+
+        score = 0
+        hinweise = []
+
+        # 1. Geschlechter-Match prüfen (für Mixed / Herren- / Damen-Doppel)
+        sp_b = temp_spieler.get(name_b)
+        if sp_a and sp_b and sp_a["Geschlecht"] != sp_b["Geschlecht"]:
+            score += 4500
+            hinweise.append("Geschlecht wechselt")
+
+        # 2. Doppelpause prüfen
+        for p_n in sim_pause:
+            if p_n in pause_vorrunde:
+                score += 15000
+                hinweise.append(f"Doppelpause {p_n}")
+
+        # 3. Nur die betroffenen Plätze auf Partner/Gegner/Balance bewerten
+        betroffene_m = set()
+        if pos_a[0] == "match":
+            betroffene_m.add(pos_a[1])
+        if pos_b[0] == "match":
+            betroffene_m.add(pos_b[1])
+
+        max_diff = 0.0
+        for m_i in betroffene_m:
+            m_obj = sim_matches[m_i]
+            if all(n in temp_spieler for n in m_obj["Team1"] + m_obj["Team2"]):
+                t1 = [temp_spieler[m_obj["Team1"][0]], temp_spieler[m_obj["Team1"][1]]]
+                t2 = [temp_spieler[m_obj["Team2"][0]], temp_spieler[m_obj["Team2"][1]]]
+                score += bewerte_platz(t1, t2)
+
+                r1 = get_power_rating(t1[0]) + get_power_rating(t1[1])
+                r2 = get_power_rating(t2[0]) + get_power_rating(t2[1])
+                diff = abs(r1 - r2)
+                if diff > max_diff:
+                    max_diff = diff
+
+                for team in [t1, t2]:
+                    if team[1]["Name"] in team[0]["Partner"]:
+                        hinweise.append("Partner-Doppelung")
+                for p1 in t1:
+                    for p2 in t2:
+                        g_cnt = p1["Gegner"].count(p2["Name"])
+                        if g_cnt >= 2:
+                            hinweise.append(f"{g_cnt + 1}× Gegner")
+                        elif g_cnt == 1:
+                            hinweise.append("2× Gegner")
+
+        # Eindeutige Hinweise deduplizieren
+        hinweise = list(dict.fromkeys(hinweise))
+        if max_diff > 2.2:
+            hinweise.append(f"Stärke-Diff {max_diff:.1f}")
+
+        if score < 1200 and not hinweise:
+            ampel = "🟢 TOP"
+            grund = f"Passt ideal (Diff {max_diff:.1f})"
+        elif score < 4000:
+            ampel = "🟡 OK"
+            grund = ", ".join(hinweise) if hinweise else f"Diff {max_diff:.1f}"
+        else:
+            ampel = "🔴 UNGÜNSTIG"
+            grund = ", ".join(hinweise) if hinweise else "Hohe Abweichung"
+
+        label = f"{ampel} · {name_b} ({pos_b[5]}) — {grund}"
+        kandidaten.append((score, label, pos_b))
+
+    kandidaten.sort(key=lambda x: x[0])
+    return kandidaten
+
 def pruefe_runden_kollisionen(r_idx):
     """Prüft die gewählte Runde gegen alle bisherigen Runden auf Doppelungen & Balance."""
     warnungen = []
@@ -781,9 +916,9 @@ if st.session_state.is_admin:
                                 st.toast(f"Platz {m['Platz']} gespeichert!")
                                 st.rerun()
 
-                    # --- MANUELLE PAARUNGS-ANPASSUNG + UNDO + KOLLISIONSPRÜFUNG ---
+                    # --- MANUELLE PAARUNGS-ANPASSUNG MIT INTELLIGENTEN TAUSCH-VORSCHLÄGEN ---
                     st.markdown("---")
-                    with st.expander(f"🔀 Paarungen in Runde {runde['Runde']} manuell tauschen & Doppelungen prüfen", expanded=(not ist_live)):
+                    with st.expander(f"🔀 Paarungen in Runde {runde['Runde']} manuell tauschen (inkl. Smart-Vorschläge)", expanded=(not ist_live)):
                         alle_in_runde = []
                         positionen = {}
                         for m_i, match in enumerate(runde["Matches"]):
@@ -798,35 +933,38 @@ if st.session_state.is_admin:
                             positionen[label] = ("pause", p_i, None, None, p_name)
 
                         if len(alle_in_runde) >= 2:
-                            sw1, sw2, sw3 = st.columns([2.2, 2.2, 1.3])
+                            st.caption("1️⃣ Wähle links den Spieler, den du versetzen möchtest – rechts sortiert das System automatisch die besten Tauschpartner nach oben:")
+                            sw1, sw2, sw3 = st.columns([1.8, 2.7, 1.2])
                             with sw1:
                                 auswahl_a = st.selectbox("Spieler A", alle_in_runde, key=f"swap_a_{r_idx}", label_visibility="collapsed")
+                            
+                            pos_a = positionen[auswahl_a]
+                            kandidaten_liste = bewerte_tausch_kandidaten(r_idx, pos_a)
+                            kandidaten_labels = [k[1] for k in kandidaten_liste]
+                            kandidaten_map = {k[1]: k[2] for k in kandidaten_liste}
+
                             with sw2:
-                                auswahl_b = st.selectbox("Spieler B", alle_in_runde, index=1, key=f"swap_b_{r_idx}", label_visibility="collapsed")
+                                auswahl_b_label = st.selectbox("Vorgeschlagener Tauschpartner B", kandidaten_labels, key=f"swap_b_{r_idx}_{pos_a[4]}", label_visibility="collapsed")
                             with sw3:
-                                if st.button("🔄 Plätze tauschen", key=f"do_swap_{r_idx}", use_container_width=True):
-                                    if auswahl_a == auswahl_b:
-                                        st.warning("Bitte zwei unterschiedliche Spieler wählen.")
+                                if st.button("🔄 Tauschen", key=f"do_swap_{r_idx}", use_container_width=True):
+                                    pos_b = kandidaten_map[auswahl_b_label]
+                                    name_a = pos_a[4]
+                                    name_b = pos_b[4]
+
+                                    if pos_a[0] == "match":
+                                        runde["Matches"][pos_a[1]][pos_a[2]][pos_a[3]] = name_b
                                     else:
-                                        pos_a = positionen[auswahl_a]
-                                        pos_b = positionen[auswahl_b]
-                                        name_a = pos_a[4]
-                                        name_b = pos_b[4]
+                                        runde["Pause"][pos_a[1]] = name_b
 
-                                        if pos_a[0] == "match":
-                                            runde["Matches"][pos_a[1]][pos_a[2]][pos_a[3]] = name_b
-                                        else:
-                                            runde["Pause"][pos_a[1]] = name_b
+                                    if pos_b[0] == "match":
+                                        runde["Matches"][pos_b[1]][pos_b[2]][pos_b[3]] = name_a
+                                    else:
+                                        runde["Pause"][pos_b[1]] = name_a
 
-                                        if pos_b[0] == "match":
-                                            runde["Matches"][pos_b[1]][pos_b[2]][pos_b[3]] = name_a
-                                        else:
-                                            runde["Pause"][pos_b[1]] = name_a
-
-                                        berechne_spieler_historie_neu()
-                                        daten_speichern()
-                                        st.toast(f"{name_a} ↔ {name_b} getauscht!")
-                                        st.rerun()
+                                    berechne_spieler_historie_neu()
+                                    daten_speichern()
+                                    st.toast(f"{name_a} ↔ {name_b} getauscht!")
+                                    st.rerun()
 
                         # Undo-Button: Setzt manuelle Täusche auf die ursprüngliche Auslosung dieser Runde zurück
                         if hat_manuelle_aenderung(runde):
@@ -857,7 +995,6 @@ if st.session_state.is_admin:
         if not st.session_state.spieler or not st.session_state.runden:
             st.info("Sobald mindestens eine Runde ausgelost wurde, erscheint hier die komplette Begegnungs-Übersicht.")
         else:
-            # 1. Doppelungs-Scanner über alle ausgelosten Runden
             partner_counts = {}
             gegner_counts = {}
             for r in st.session_state.runden:
