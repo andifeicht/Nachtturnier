@@ -482,7 +482,6 @@ def bewerte_tausch_kandidaten(r_idx, pos_a):
     vorherige_runden = st.session_state.runden[:r_idx]
     aktuelle_runde = st.session_state.runden[r_idx]
 
-    # Historie aus den Runden VOR r_idx aufbauen
     hist_partner = {s["Name"]: [] for s in st.session_state.spieler}
     hist_gegner = {s["Name"]: [] for s in st.session_state.spieler}
     pause_vorrunde = set()
@@ -504,7 +503,6 @@ def bewerte_tausch_kandidaten(r_idx, pos_a):
                         hist_gegner[x].append(y)
                         hist_gegner[y].append(x)
 
-    # Temporäre Spielerobjekte mit exakt dieser Historie
     temp_spieler = {}
     for name, s in name_zu_spieler.items():
         cp = copy.deepcopy(s)
@@ -529,7 +527,6 @@ def bewerte_tausch_kandidaten(r_idx, pos_a):
         if name_a == name_b:
             continue
 
-        # Simuliere Tausch A <-> B
         sim_matches = copy.deepcopy(aktuelle_runde["Matches"])
         sim_pause = list(aktuelle_runde.get("Pause", []))
 
@@ -546,19 +543,16 @@ def bewerte_tausch_kandidaten(r_idx, pos_a):
         score = 0
         hinweise = []
 
-        # 1. Geschlechter-Match prüfen (für Mixed / Herren- / Damen-Doppel)
         sp_b = temp_spieler.get(name_b)
         if sp_a and sp_b and sp_a["Geschlecht"] != sp_b["Geschlecht"]:
             score += 4500
             hinweise.append("Geschlecht wechselt")
 
-        # 2. Doppelpause prüfen
         for p_n in sim_pause:
             if p_n in pause_vorrunde:
                 score += 15000
                 hinweise.append(f"Doppelpause {p_n}")
 
-        # 3. Nur die betroffenen Plätze auf Partner/Gegner/Balance bewerten
         betroffene_m = set()
         if pos_a[0] == "match":
             betroffene_m.add(pos_a[1])
@@ -590,7 +584,6 @@ def bewerte_tausch_kandidaten(r_idx, pos_a):
                         elif g_cnt == 1:
                             hinweise.append("2× Gegner")
 
-        # Eindeutige Hinweise deduplizieren
         hinweise = list(dict.fromkeys(hinweise))
         if max_diff > 2.2:
             hinweise.append(f"Stärke-Diff {max_diff:.1f}")
@@ -793,6 +786,43 @@ if st.session_state.is_admin:
                             st.rerun()
 
             st.divider()
+
+            # --- EIN-KLICK-BACKUP & WIEDERHERSTELLUNG ---
+            with st.expander("💾 Backup sichern & wiederherstellen (empfohlen vor & während des Turniers)"):
+                b_col1, b_col2 = st.columns(2)
+                with b_col1:
+                    st.info("Speichere den aktuellen Stand (Teilnehmer, Auslosungen & Ergebnisse) lokal als Datei auf deinem Gerät.")
+                    backup_json = json.dumps({
+                        "spieler": st.session_state.spieler,
+                        "runden": st.session_state.runden,
+                        "timer_end": st.session_state.timer_end
+                    }, ensure_ascii=False, indent=2)
+                    st.download_button(
+                        label="⬇️ Aktuellen Turnierstand herunterladen (JSON)",
+                        data=backup_json,
+                        file_name=f"nachtturnier_backup_r{len(st.session_state.runden)}.json",
+                        mime="application/json",
+                        use_container_width=True
+                    )
+                with b_col2:
+                    st.info("Lade eine zuvor gesicherte Backup-Datei hoch, um den Spielstand sofort wiederherzustellen.")
+                    uploaded_backup = st.file_uploader("Backup-Datei (.json) auswählen", type=["json"], label_visibility="collapsed")
+                    if uploaded_backup is not None:
+                        if st.button("⬆️ Dieses Backup jetzt einspielen", type="primary", use_container_width=True):
+                            try:
+                                geladene_daten = json.load(uploaded_backup)
+                                if "spieler" in geladene_daten and "runden" in geladene_daten:
+                                    st.session_state.spieler = geladene_daten["spieler"]
+                                    st.session_state.runden = geladene_daten["runden"]
+                                    st.session_state.timer_end = geladene_daten.get("timer_end", None)
+                                    daten_speichern()
+                                    st.toast("Backup erfolgreich eingespielt!")
+                                    st.rerun()
+                                else:
+                                    st.error("Ungültige Backup-Datei.")
+                            except Exception as e:
+                                st.error(f"Fehler beim Einlesen: {e}")
+
             with st.expander("⚠️ Turnier zurücksetzen (Testlauf beenden oder alles löschen)"):
                 r_col1, r_col2 = st.columns(2)
                 with r_col1:
@@ -849,7 +879,6 @@ if st.session_state.is_admin:
                 
                 with st.expander(f"Runde {runde['Runde']} · {status_badge} (Pause: {', '.join(runde['Pause']) if runde['Pause'] else 'Niemand'})", expanded=(r_idx == len(st.session_state.runden) - 1)):
                     
-                    # --- FREIGABE-LEISTE FÜR ENTWÜRFE ---
                     if not ist_live:
                         st.warning("🔒 **Vorschau-Modus:** Teilnehmer sehen diese Runde noch nicht. Prüfe die Paarungen und gib sie frei, sobald alles passt.")
                         f_col1, f_col2, f_col3 = st.columns([2, 1.5, 1.5])
@@ -966,7 +995,6 @@ if st.session_state.is_admin:
                                     st.toast(f"{name_a} ↔ {name_b} getauscht!")
                                     st.rerun()
 
-                        # Undo-Button: Setzt manuelle Täusche auf die ursprüngliche Auslosung dieser Runde zurück
                         if hat_manuelle_aenderung(runde):
                             if st.button(f"↩️ Manuelle Änderungen verwerfen & Original-Auslosung Runde {runde['Runde']} wiederherstellen", key=f"undo_swap_{r_idx}", use_container_width=True):
                                 for m_i, orig_m in enumerate(runde["Original_Matches"]):
@@ -978,7 +1006,6 @@ if st.session_state.is_admin:
                                 st.toast("Ursprüngliche Auslosung wiederhergestellt!")
                                 st.rerun()
 
-                        # Automatische Live-Prüfung auf Doppelungen & Balance
                         warnungen = pruefe_runden_kollisionen(r_idx)
                         if warnungen:
                             st.warning("**Automatischer Check (Hinweise zu dieser Runde):**\n\n" + "\n".join(f"- {w}" for w in warnungen))
