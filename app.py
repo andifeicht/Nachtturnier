@@ -178,7 +178,6 @@ if st.session_state.show_login and not st.session_state.is_admin:
 def render_live_timer():
     aktuelle_daten = daten_laden()
     aktuelles_timer_end = aktuelle_daten.get("timer_end", None)
-    st.session_state.timer_end = aktuelles_timer_end
     timer_aktiv = aktuelles_timer_end is not None
 
     if st.session_state.is_admin:
@@ -533,10 +532,11 @@ if st.session_state.is_admin:
                 sc2.write(f"{'Herr' if s['Geschlecht']=='m' else 'Dame'}")
                 
                 with sc3:
+                    # Eindeutiger Key über den Spielernamen verhindert Verschiebungen beim Löschen!
                     aktuelle_st = s["Stärke"] if s["Stärke"] in [0, 1, 2, 3, 4] else 3
                     neue_staerke = st.selectbox(
                         "Stärke", [0, 1, 2, 3, 4], index=aktuelle_st,
-                        key=f"st_edit_{idx}", label_visibility="collapsed", format_func=lambda x: f"Stärke {x}"
+                        key=f"st_edit_{s['Name']}", label_visibility="collapsed", format_func=lambda x: f"Stärke {x}"
                     )
                     if neue_staerke != s["Stärke"]:
                         st.session_state.spieler[idx]["Stärke"] = neue_staerke
@@ -546,13 +546,13 @@ if st.session_state.is_admin:
                 sc4.write(f"Spiele: {s['Spiele']} | Pausen: {s['Pausen']}")
                 with sc5:
                     btn_label = "Abmelden" if s.get("Aktiv", True) else "Aktivieren"
-                    if st.button(btn_label, key=f"toggle_{idx}", use_container_width=True):
+                    if st.button(btn_label, key=f"toggle_{s['Name']}", use_container_width=True):
                         st.session_state.spieler[idx]["Aktiv"] = not s.get("Aktiv", True)
                         daten_speichern()
                         st.rerun()
                 with sc6:
                     if len(st.session_state.runden) == 0:
-                        if st.button("🗑️", key=f"del_{idx}", help="Spieler komplett entfernen"):
+                        if st.button("🗑️", key=f"del_{s['Name']}", help="Spieler komplett entfernen"):
                             st.session_state.spieler.pop(idx)
                             daten_speichern()
                             st.rerun()
@@ -696,7 +696,6 @@ else:
                     status_html = f'<span style="color:#4ade80; font-weight:700;">✅ {m["Punkte1"]} : {m["Punkte2"]}</span>'
                 elif m.get("Gemeldet", False):
                     if darf_korrigieren:
-                        korr_end_ms = int((gemeldet_um + 300) * 1000)
                         timer_span_id = f"korr_timer_{r_idx}_{m_idx}"
                         status_html = (
                             f'<span style="color:#38bdf8; font-weight:700;">'
@@ -728,7 +727,6 @@ else:
                 """
                 st.markdown(card_html, unsafe_allow_html=True)
                 
-                # Live-JavaScript-Countdown für das 5-Minuten-Korrekturfenster
                 if darf_korrigieren:
                     korr_end_ms = int((gemeldet_um + 300) * 1000)
                     timer_span_id = f"korr_timer_{r_idx}_{m_idx}"
@@ -779,7 +777,6 @@ else:
                             else:
                                 frisch = daten_laden()
                                 match_ref = frisch["runden"][r_idx]["Matches"][m_idx]
-                                # Sicherheitscheck: nach Ablauf der 5 Minuten keine Speicherung mehr zulassen
                                 if match_ref.get("Gemeldet_um") and (time.time() - match_ref["Gemeldet_um"] > 300):
                                     st.error("Die 5-Minuten-Korrekturzeit ist abgelaufen – bitte kurz bei der Turnierleitung melden.")
                                 else:
